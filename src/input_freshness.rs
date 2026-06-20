@@ -309,36 +309,6 @@ impl CanonicalStateOracle for BaseOracleInputOracle {
     }
 }
 
-/// Compose two oracles: `model_epoch_distance` is routed to `model`,
-/// `input_lag_blocks` to `input`. The production wiring for pieza 1b-i is
-/// `SplitOracle { model: MockCanonicalStateOracle::always_fresh(), input:
-/// BaseOracleInputOracle::new(..) }` — f_m mocked, f_i real, gate untouched.
-#[derive(Debug)]
-pub struct SplitOracle<M: CanonicalStateOracle, I: CanonicalStateOracle> {
-    /// Oracle answering `f_m` (model epoch distance).
-    pub model: M,
-    /// Oracle answering `f_i` (input lag).
-    pub input: I,
-}
-
-impl<M: CanonicalStateOracle, I: CanonicalStateOracle> CanonicalStateOracle for SplitOracle<M, I> {
-    fn model_epoch_distance(
-        &self,
-        weights_hash: Hash32,
-        now: &TripleAnchor,
-    ) -> Result<u64, PocError> {
-        self.model.model_epoch_distance(weights_hash, now)
-    }
-
-    fn input_lag_blocks(
-        &self,
-        input_manifest_root: Hash32,
-        now: &TripleAnchor,
-    ) -> Result<u64, PocError> {
-        self.input.input_lag_blocks(input_manifest_root, now)
-    }
-}
-
 /// Parse the fixed `Date.prototype.toISOString()` form
 /// (`YYYY-MM-DDTHH:MM:SS.sssZ`, always UTC) to Unix seconds. Fractional
 /// seconds and the trailing `Z` are ignored. Only compiled when the

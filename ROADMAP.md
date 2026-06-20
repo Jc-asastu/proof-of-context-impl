@@ -63,12 +63,19 @@ Phase numbering follows the Working Bible protocol used throughout the author's 
 - `input_freshness::SplitOracle` — composes "f_m mocked, f_i real" with zero gate change.
 - 12 integration tests + canonical vectors; default build untouched (the module is feature-gated).
 
-### Pieza 1b-m — Real model-freshness registry (pending)
+### Pieza 1b-m — Real model-freshness oracle (LANDED, `--features oracle-fm`)
 
-**Goals:**
-- On-chain model-root + epoch registry exposing canonical `weights_hash` per epoch with activation block height; read at the settlement anchor (reuse the `clients` EVM-RPC scaffold for an `eth_call` reader).
-- A real `Renewal::evaluate` backed by the same registry (prospective-only bump semantics).
-- **Decision required:** trust model — single publisher vs committee/quorum (paper §7 constraint 8 leans multi-source quorum).
+**Decision taken:** committee/quorum trust model (paper §7 constraint 8).
+
+**Output:**
+- `model_registry::ModelLineage` — an ordered, canonical-JSON-hashed model lineage (`{weights_hash, epoch, activation_block}` per version), reusing the `canonical` module (shared with f_i).
+- `model_registry::QuorumModelOracle` — adopts a lineage only when an **M-of-N quorum** of registered, distinct publishers signed the identical canonical snapshot (Ed25519, offline — no network at settlement). `model_epoch_distance` = canonical-position-at-`now` − committed-position; `Err(OracleUnavailable)` off-lineage or before any activation.
+- Composes with the f_i oracle via `oracle::SplitOracle` (moved there from `input_freshness` so it is available without either feature). With both features, `SplitOracle { model: QuorumModelOracle, input: BaseOracleInputOracle }` gates `f_m`+`f_i` fully against real oracles.
+- 11 integration tests + shared canonical vectors; default build untouched.
+
+**Deferred (follow-ups):**
+- An **on-chain registry source** (`eth_call` reader via the `clients` scaffold) behind the same lineage-adoption boundary — v1 is offline quorum-signed.
+- A real `Renewal::evaluate`: the trait's signature `(commitment, current_canonical_root)` carries neither `now` nor thresholds, so it cannot distinguish prospective-only protection from window expiry. **Needs a trait redesign before a faithful implementation.**
 
 ### Phase 3b — TEE backend (pending)
 

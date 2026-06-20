@@ -40,3 +40,35 @@ pub trait CanonicalStateOracle {
     fn input_lag_blocks(&self, input_manifest_root: Hash32, now: &TripleAnchor)
         -> Result<u64, PocError>;
 }
+
+/// Compose two oracles by axis: `model_epoch_distance` is routed to `model`,
+/// `input_lag_blocks` to `input`. This is how the crate mixes a real oracle on
+/// one axis with a mock (or another real oracle) on the other — e.g.
+/// `SplitOracle { model: MockCanonicalStateOracle::always_fresh(), input:
+/// BaseOracleInputOracle::new(..) }` for "f_m mocked, f_i real", or the inverse
+/// once both real oracles exist — with zero change to the settlement gate.
+#[derive(Debug)]
+pub struct SplitOracle<M: CanonicalStateOracle, I: CanonicalStateOracle> {
+    /// Oracle answering `f_m` (model epoch distance).
+    pub model: M,
+    /// Oracle answering `f_i` (input lag).
+    pub input: I,
+}
+
+impl<M: CanonicalStateOracle, I: CanonicalStateOracle> CanonicalStateOracle for SplitOracle<M, I> {
+    fn model_epoch_distance(
+        &self,
+        weights_hash: Hash32,
+        now: &TripleAnchor,
+    ) -> Result<u64, PocError> {
+        self.model.model_epoch_distance(weights_hash, now)
+    }
+
+    fn input_lag_blocks(
+        &self,
+        input_manifest_root: Hash32,
+        now: &TripleAnchor,
+    ) -> Result<u64, PocError> {
+        self.input.input_lag_blocks(input_manifest_root, now)
+    }
+}

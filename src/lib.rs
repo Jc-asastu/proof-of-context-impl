@@ -19,8 +19,13 @@
 //! behind `--features oracle-fi`): [`input_freshness::BaseOracleInputOracle`]
 //! verifies witness-presented BaseOracle attestations and decides `f_i` from
 //! their block anchor, composed with a model oracle via
-//! [`input_freshness::SplitOracle`]. The *real* `f_m` model-root registry and
-//! TEE-backed attestation remain pieza 1b-m / Phase 3b; see `ROADMAP.md`.
+//! [`oracle::SplitOracle`]. The `f_m` axis also has a **real** oracle (pieza
+//! 1b-m, behind `--features oracle-fm`): [`model_registry::QuorumModelOracle`]
+//! adopts a committee/quorum-signed model lineage and decides `f_m` against it.
+//! With both features, `SplitOracle { model: QuorumModelOracle, input:
+//! BaseOracleInputOracle }` gates `f_m` and `f_i` entirely against real oracles.
+//! TEE-backed attestation and an on-chain registry source remain Phase 3b; a
+//! real `Renewal::evaluate` needs a trait redesign (see `ROADMAP.md`).
 //!
 //! ## One-sentence framing
 //!
@@ -84,14 +89,19 @@ pub mod renewal;
 pub mod settle;
 
 /// Canonical-JSON SHA-256 (byte-identical to BaseOracle). Opt in with
-/// `--features oracle-fi`.
-#[cfg(feature = "oracle-fi")]
+/// `--features oracle-fi` or `--features oracle-fm`.
+#[cfg(any(feature = "oracle-fi", feature = "oracle-fm"))]
 pub mod canonical;
 
 /// Real input-freshness (`f_i`) oracle over BaseOracle attestations (pieza
 /// 1b-i). Opt in with `--features oracle-fi`.
 #[cfg(feature = "oracle-fi")]
 pub mod input_freshness;
+
+/// Real model-freshness (`f_m`) oracle — a committee/quorum model-lineage
+/// registry (pieza 1b-m). Opt in with `--features oracle-fm`.
+#[cfg(feature = "oracle-fm")]
+pub mod model_registry;
 
 /// Real-anchor clients (Drand + EVM RPC). Opt in with `--features real-anchors`.
 #[cfg(feature = "real-anchors")]
@@ -102,11 +112,12 @@ pub use commitment::{ContextCommitter, FreshnessCommitment};
 pub use context::ExecutionContextRoot;
 pub use error::PocError;
 pub use freshness::{FreshnessThresholds, FreshnessType};
-pub use oracle::CanonicalStateOracle;
+pub use oracle::{CanonicalStateOracle, SplitOracle};
 pub use renewal::Renewal;
 
 #[cfg(feature = "oracle-fi")]
-pub use input_freshness::{
-    BaseOracleInputOracle, InputAttestation, InputFreshnessWitness, SplitOracle,
-};
+pub use input_freshness::{BaseOracleInputOracle, InputAttestation, InputFreshnessWitness};
+
+#[cfg(feature = "oracle-fm")]
+pub use model_registry::{ModelEpoch, ModelLineage, QuorumModelOracle, QuorumSignature};
 pub use settle::{SettlementGate, SettlementResult};

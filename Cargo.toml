@@ -27,6 +27,12 @@ real-anchors = ["dep:ureq", "dep:serde_json"]
 # fallback inside it additionally requires `real-anchors`.
 oracle-fi = ["dep:serde_json"]
 
+# Enable the real model-freshness (f_m) oracle: the `canonical` + `model_registry`
+# modules. A committee/quorum registry — N publishers sign a canonical model
+# lineage (epoch + activation block per weights hash); the oracle verifies an
+# M-of-N quorum and decides f_m against it. Adds serde_json. Pieza 1b-m.
+oracle-fm = ["dep:serde_json"]
+
 [dependencies]
 # Phase 2 primitives:
 #   - sha2 for Merkle commitments over ExecutionContextRoot

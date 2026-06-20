@@ -20,10 +20,10 @@ use proof_of_context::{
         AttentionImpl, ExecutionContextRoot, Hash32, InferenceConfig, PrecisionMode, SamplingParams,
     },
     freshness::{FreshnessThresholds, FreshnessType},
-    input_freshness::{BaseOracleInputOracle, InputAttestation, InputFreshnessWitness, SplitOracle},
+    input_freshness::{BaseOracleInputOracle, InputAttestation, InputFreshnessWitness},
     mock::{MockCanonicalStateOracle, MockCommitter, MockSettlementGate, MockVerifier},
     settle::{SettlementGate, SettlementResult},
-    CanonicalStateOracle, ContextCommitter, PocError,
+    CanonicalStateOracle, ContextCommitter, PocError, SplitOracle,
 };
 
 // --- helpers ---------------------------------------------------------------
