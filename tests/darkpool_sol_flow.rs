@@ -190,25 +190,27 @@ fn inconsistent_anchor_is_computational() {
 }
 
 #[test]
-fn tampered_commitment_signature_errs() {
+fn tampered_commitment_signature_errs_with_attribution() {
     let now = wall_of(ROUND);
     let op = key(900);
     let oracle = oracle_with_price(&op, now - 5);
     let mut p = party(PartyRole::Intent, 1, now - 10);
     p.commitment.signature[0] ^= 0xFF;
     let err = verify_party_contexts(&MockVerifier::new(), &[p], &oracle, now, &DarkPoolThresholds::default()).unwrap_err();
-    assert_eq!(err, PocError::InvalidSignature);
+    assert_eq!(err.role, PartyRole::Intent, "integrity abort must name the failing party");
+    assert_eq!(err.source, PocError::InvalidSignature);
 }
 
 #[test]
-fn disclosed_root_mismatch_errs() {
+fn disclosed_root_mismatch_errs_with_attribution() {
     let now = wall_of(ROUND);
     let op = key(900);
     let oracle = oracle_with_price(&op, now - 5);
-    let mut p = party(PartyRole::Intent, 1, now - 10);
+    let mut p = party(PartyRole::Response, 1, now - 10);
     p.root = sample_root(999); // different from what was committed
     let err = verify_party_contexts(&MockVerifier::new(), &[p], &oracle, now, &DarkPoolThresholds::default()).unwrap_err();
-    assert_eq!(err, PocError::RootMismatch);
+    assert_eq!(err.role, PartyRole::Response, "integrity abort must name the failing party");
+    assert_eq!(err.source, PocError::RootMismatch);
 }
 
 #[test]

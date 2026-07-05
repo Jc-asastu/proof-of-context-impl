@@ -95,32 +95,69 @@ pub enum DarkPoolSettlement {
     Rejected(Vec<PartyVerdict>),
 }
 
+/// An **integrity** failure — bad signature, bad attestation, or a disclosed
+/// root that does not bind to the committed `context_root` — attributed to the
+/// party that presented the failing artifact.
+///
+/// Integrity is deliberately kept distinct from a per-party freshness
+/// rejection (freshness is an economic verdict; integrity is a protocol
+/// violation that aborts the whole settlement), but the abort still carries
+/// *who* violated: without the role, a malicious party could grief every
+/// negotiated trade it touches with an unattributable bad signature, and the
+/// caller could not slash or ban the responsible agent — losing exactly the
+/// per-party attribution the multi-party gate exists to provide.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartyIntegrityError {
+    /// The party whose commitment or disclosure failed integrity.
+    pub role: PartyRole,
+    /// The underlying integrity failure.
+    pub source: PocError,
+}
+
+impl std::fmt::Display for PartyIntegrityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "integrity failure for party {:?}: {}", self.role, self.source)
+    }
+}
+
+impl std::error::Error for PartyIntegrityError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+
 /// Gate an agent-to-agent negotiated trade on the freshness of every party's
 /// context. Clears iff all parties are fresh.
 ///
 /// `verifier` checks each commitment's signature + attestation chain (an
-/// **integrity** failure — bad signature, bad attestation, or a disclosed root
-/// that does not bind to the committed `context_root` — is a hard `Err` that
-/// aborts the whole settlement, distinct from a per-party freshness rejection).
-/// `price_oracle` answers the seconds-based `f_i` (price-as-of age) per market;
-/// `now_secs` is the settlement clock in unix seconds (as `Clock::unix_timestamp`
-/// yields on-chain).
+/// **integrity** failure is a hard `Err` that aborts the whole settlement,
+/// distinct from a per-party freshness rejection — but the
+/// [`PartyIntegrityError`] carries the failing party's role so the caller can
+/// attribute the abort). `price_oracle` answers the seconds-based `f_i`
+/// (price-as-of age) per market; `now_secs` is the settlement clock in unix
+/// seconds (as `Clock::unix_timestamp` yields on-chain).
 pub fn verify_party_contexts<V: CommitmentVerifier>(
     verifier: &V,
     parties: &[PartyContext],
     price_oracle: &PriceFreshnessOracle,
     now_secs: u64,
     thresholds: &DarkPoolThresholds,
-) -> Result<DarkPoolSettlement, PocError> {
+) -> Result<DarkPoolSettlement, PartyIntegrityError> {
     let mut failing: Vec<PartyVerdict> = Vec::new();
 
     for party in parties {
-        // 1. Integrity (hard abort): signature + attestation, then context
-        //    binding. Reuses the exact primitives the single-commitment gate
-        //    calls — see `mock.rs`.
-        verifier.verify(&party.commitment)?;
+        // 1. Integrity (hard abort, attributed): signature + attestation, then
+        //    context binding. Reuses the exact primitives the
+        //    single-commitment gate calls — see `mock.rs`.
+        verifier.verify(&party.commitment).map_err(|source| PartyIntegrityError {
+            role: party.role.clone(),
+            source,
+        })?;
         if party.root.merkle_root() != party.commitment.context_root {
-            return Err(PocError::RootMismatch);
+            return Err(PartyIntegrityError {
+                role: party.role.clone(),
+                source: PocError::RootMismatch,
+            });
         }
 
         let mut violations = Vec::new();

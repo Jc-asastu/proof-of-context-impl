@@ -1,6 +1,6 @@
 [package]
 name = "proof-of-context"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 authors = ["Juan Cruz Maisu <juancmaisu@outlook.com>"]
 license = "MIT OR Apache-2.0"
@@ -74,3 +74,14 @@ serde_json = "1"
 [lib]
 name = "proof_of_context"
 path = "src/lib.rs"
+
+# Examples that depend on feature-gated modules must declare it, so the
+# default `cargo test` / `cargo build` doesn't try to compile them without
+# the modules they import.
+[[example]]
+name = "gen_test_vectors"
+required-features = ["oracle-fi"]
+
+[[example]]
+name = "measure_costs"
+required-features = ["oracle-fi", "oracle-fm", "darkpool-sol"]

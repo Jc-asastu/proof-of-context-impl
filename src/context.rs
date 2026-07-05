@@ -54,12 +54,22 @@ pub enum AttentionImpl {
 }
 
 impl AttentionImpl {
-    fn discriminant(&self) -> u8 {
+    /// Injective canonical encoding of the attention-implementation field.
+    ///
+    /// Enumerated variants encode as a single discriminant byte; `Other(tag)`
+    /// encodes as the two-byte sequence `0x80 ‖ tag`, so every distinct tag
+    /// yields a distinct preimage. (Before v0.3.1 the tag was folded into
+    /// seven bits — `0x80 | (tag & 0x7F)` — colliding pairs of `Other` tags
+    /// differing only in the high bit; the paper §10.2 disclosed this as the
+    /// trivial-evasion vector §8 warns of.) The `0x80` marker cannot collide
+    /// with the enumerated discriminants (1–3), and no published test vector
+    /// or root used `Other`, so enumerated-variant roots are unchanged.
+    fn encoding(&self) -> ([u8; 2], usize) {
         match self {
-            Self::FlashAttention2 => 1,
-            Self::Sdpa => 2,
-            Self::FlexAttention => 3,
-            Self::Other(tag) => 0x80 | (tag & 0x7F),
+            Self::FlashAttention2 => ([1, 0], 1),
+            Self::Sdpa => ([2, 0], 1),
+            Self::FlexAttention => ([3, 0], 1),
+            Self::Other(tag) => ([0x80, *tag], 2),
         }
     }
 }
@@ -161,24 +171,89 @@ impl ExecutionContextRoot {
     /// recomputing the root.
     pub fn merkle_root(&self) -> Hash32 {
         let mut h = Sha256::new();
-        h.update(&self.weights_hash);
-        h.update(&self.tokenizer_hash);
-        h.update(&self.system_prompt_hash);
-        h.update(&self.sampling_params.to_bytes());
-        h.update(&self.runtime_version);
-        h.update(&[self.attention_impl_id.discriminant()]);
-        h.update(&[self.precision_mode.discriminant()]);
-        h.update(&self.inference_config.to_bytes());
-        h.update(&self.input_manifest_root);
+        h.update(self.weights_hash);
+        h.update(self.tokenizer_hash);
+        h.update(self.system_prompt_hash);
+        h.update(self.sampling_params.to_bytes());
+        h.update(self.runtime_version);
+        let (attn_enc, attn_len) = self.attention_impl_id.encoding();
+        h.update(&attn_enc[..attn_len]);
+        h.update([self.precision_mode.discriminant()]);
+        h.update(self.inference_config.to_bytes());
+        h.update(self.input_manifest_root);
         match self.kv_cache_root {
             Some(root) => {
-                h.update(&[1u8]);
-                h.update(&root);
+                h.update([1u8]);
+                h.update(root);
             }
             None => {
-                h.update(&[0u8]);
+                h.update([0u8]);
             }
         }
         h.finalize().into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_root(attention: AttentionImpl) -> ExecutionContextRoot {
+        ExecutionContextRoot {
+            weights_hash: [0x11; 32],
+            tokenizer_hash: [0x22; 32],
+            system_prompt_hash: [0x33; 32],
+            sampling_params: SamplingParams { temperature: 0.7, top_k: 40, top_p: 0.9, seed: 42 },
+            runtime_version: [0x44; 32],
+            attention_impl_id: attention,
+            precision_mode: PrecisionMode::Bf16,
+            inference_config: InferenceConfig {
+                max_tokens: 512,
+                stop_sequences_root: [0x55; 32],
+                penalty_params_root: [0x66; 32],
+            },
+            input_manifest_root: [0x77; 32],
+            kv_cache_root: None,
+        }
+    }
+
+    /// The exact pair the pre-v0.3.1 seven-bit fold collided:
+    /// `Other(t)` and `Other(t | 0x80)` differ only in the high bit.
+    #[test]
+    fn other_tags_differing_in_high_bit_do_not_collide() {
+        for t in [0x00u8, 0x01, 0x3F, 0x7F] {
+            let low = sample_root(AttentionImpl::Other(t)).merkle_root();
+            let high = sample_root(AttentionImpl::Other(t | 0x80)).merkle_root();
+            assert_ne!(low, high, "Other({t:#04x}) collided with its high-bit sibling");
+        }
+    }
+
+    /// Every `Other` tag is distinct from every enumerated variant.
+    #[test]
+    fn other_tags_distinct_from_enumerated_variants() {
+        let enumerated = [
+            sample_root(AttentionImpl::FlashAttention2).merkle_root(),
+            sample_root(AttentionImpl::Sdpa).merkle_root(),
+            sample_root(AttentionImpl::FlexAttention).merkle_root(),
+        ];
+        // Include the tags that alias the enumerated discriminants (1-3).
+        for t in [1u8, 2, 3, 0x80, 0xFF] {
+            let other = sample_root(AttentionImpl::Other(t)).merkle_root();
+            assert!(
+                !enumerated.contains(&other),
+                "Other({t:#04x}) collided with an enumerated variant"
+            );
+        }
+    }
+
+    /// Enumerated-variant encodings are unchanged by the injectivity fix:
+    /// their preimage is still the single discriminant byte, so roots
+    /// committed before v0.3.1 with enumerated variants re-verify.
+    #[test]
+    fn enumerated_variants_encode_as_single_discriminant_byte() {
+        assert_eq!(AttentionImpl::FlashAttention2.encoding(), ([1, 0], 1));
+        assert_eq!(AttentionImpl::Sdpa.encoding(), ([2, 0], 1));
+        assert_eq!(AttentionImpl::FlexAttention.encoding(), ([3, 0], 1));
+        assert_eq!(AttentionImpl::Other(0xAB).encoding(), ([0x80, 0xAB], 2));
     }
 }

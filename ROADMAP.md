@@ -75,7 +75,7 @@ Phase numbering follows the Working Bible protocol used throughout the author's 
 
 **Deferred (follow-ups):**
 - An **on-chain registry source** (`eth_call` reader via the `clients` scaffold) behind the same lineage-adoption boundary — v1 is offline quorum-signed.
-- A real `Renewal::evaluate`: the trait's signature `(commitment, current_canonical_root)` carries neither `now` nor thresholds, so it cannot distinguish prospective-only protection from window expiry. **Needs a trait redesign before a faithful implementation.**
+- ~~A real `Renewal::evaluate`~~ **LANDED** (commit `1366f70`): the trait was redesigned — `evaluate` now takes the settlement clock `now` and the `thresholds` — and `WindowedRenewal` implements prospective-only semantics (`StillValid` / `ProtectedByProspectiveOnly` / `ExpiredRequireRecommit`) against the `f_s` window.
 
 ### Solana brick 1 — dark-pool multi-party freshness (LANDED, `--features darkpool-sol`)
 
@@ -87,7 +87,11 @@ Phase numbering follows the Working Bible protocol used throughout the author's 
 - `anchor::TripleAnchor::tee_drand_consistent` — extracted chain-neutral consistency (no Base block leg) for unix-seconds venues.
 - 10 integration tests; default build untouched (feature-gated).
 
-**Next (Solana brick 2, recommended):** an off-chain **settlement keeper** that runs `verify_party_contexts` and submits `a2a_darkpool::accept_and_settle` only on `Clear` (zero Anchor-program change; trust = liveness only). **Brick 3:** on-chain enforcement in `accept_and_settle` via the ed25519-precompile + Instructions-sysvar pattern already in `order_settlement/signature.rs`. Author decision deferred to brick 2: confirm the operator key signing `oracle_router::push_price` is what `PriceFreshnessOracle` pins.
+### Solana brick 3 — on-chain enforcement (LANDED, sur-protocol-solana PR #1)
+
+**Output:** on-chain `f_i` price-freshness gate inside `a2a_darkpool`'s settlement instruction (merged 2026-06-20, squash): the canonical market price's last-update timestamp must be within a freshness budget of the settlement clock, plus a per-quote 32-byte context commitment authenticated by the agent's transaction signature. 96-test Anchor suite green on a local validator; full multi-party settlement measured at 120,799 CU (≈8.6% of the per-tx budget). Reported in paper §10.5–§10.6.
+
+**Next (Solana brick 2, still open):** an off-chain **settlement keeper** that runs `verify_party_contexts` and submits `a2a_darkpool::accept_and_settle` only on `Clear` (zero Anchor-program change; trust = liveness only) — complements the on-chain gate by pre-filtering off-chain with the richer crate-side checks (`consistent`, `f_s`, per-party attribution). Author decision pending: confirm the operator key signing `oracle_router::push_price` is what `PriceFreshnessOracle` pins.
 
 ### Phase 3b — TEE backend (pending)
 
@@ -108,13 +112,14 @@ Phase numbering follows the Working Bible protocol used throughout the author's 
 
 ## Phase 4 — SUR Protocol integration (target `v0.4`)
 
-**Goals:**
-- Wire proof-of-context into the SUR Protocol settlement rail ([github.com/asastuai/sur-protocol](https://github.com/asastuai/sur-protocol))
-- Add a settlement-gating path for inference-priced trades in the A2A Dark Pool
-- Smart-contract hooks on Base for reading the canonical execution-context root and publishing root bumps prospectively
-- End-to-end demo: an agent purchases an inference from a worker, the worker commits, the protocol gates settlement, and payment clears via x402 if and only if the commitment is fresh
+**Deployment target is SUR Solana** ([github.com/asastuai/sur-protocol-solana](https://github.com/asastuai/sur-protocol-solana)); the Base/EVM path ([github.com/asastuai/sur-protocol](https://github.com/asastuai/sur-protocol)) remains the reference adapter. Bricks 1 (crate-side multi-party gate) and 3 (on-chain `f_i` gate, PR #1) are landed — see Phase 3.
 
-**Gate:** End-to-end demo on Base testnet showing (a) a fresh commitment clearing payment, (b) a stale commitment being rejected with the correct violated-freshness-type event, (c) a prospective-only root bump not retroactively griefing an in-flight commitment.
+**Remaining goals:**
+- Solana brick 2: the off-chain settlement keeper (see above)
+- On-chain hooks for reading the canonical execution-context root and publishing root bumps prospectively (the `f_m` axis on-chain)
+- End-to-end demo: an agent purchases an inference from a worker, the worker commits, the protocol gates settlement, and payment clears if and only if the commitment is fresh
+
+**Gate:** End-to-end demo on devnet/testnet showing (a) a fresh commitment clearing payment, (b) a stale commitment being rejected with the correct violated-freshness-type event and the correct party attribution, (c) a prospective-only root bump not retroactively griefing an in-flight commitment.
 
 ---
 

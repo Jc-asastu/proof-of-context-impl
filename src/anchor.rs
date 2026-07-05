@@ -172,9 +172,9 @@ pub struct AnchorSkew {
 }
 
 fn abs_diff_u64(a: u64, b: u64) -> u64 {
-    if a > b { a - b } else { b - a }
+    a.abs_diff(b)
 }
 
 fn abs_diff_u128(a: u128, b: u128) -> u128 {
-    if a > b { a - b } else { b - a }
+    a.abs_diff(b)
 }

@@ -53,11 +53,11 @@ impl ContextCommitter for MockCommitter {
 
         // Build the canonical signing digest.
         let mut h = Sha256::new();
-        h.update(&context_root);
-        h.update(&anchor.block_height.to_le_bytes());
-        h.update(&anchor.tee_timestamp.to_le_bytes());
-        h.update(&anchor.drand_round.to_le_bytes());
-        h.update(&output_hash);
+        h.update(context_root);
+        h.update(anchor.block_height.to_le_bytes());
+        h.update(anchor.tee_timestamp.to_le_bytes());
+        h.update(anchor.drand_round.to_le_bytes());
+        h.update(output_hash);
         let digest: [u8; 32] = h.finalize().into();
 
         // Sign the digest.
@@ -90,6 +90,7 @@ impl ContextCommitter for MockCommitter {
 pub struct MockVerifier;
 
 impl MockVerifier {
+    /// Construct the (stateless) software-only verifier.
     pub fn new() -> Self { Self }
 }
 

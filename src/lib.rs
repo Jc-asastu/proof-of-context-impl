@@ -24,8 +24,10 @@
 //! adopts a committee/quorum-signed model lineage and decides `f_m` against it.
 //! With both features, `SplitOracle { model: QuorumModelOracle, input:
 //! BaseOracleInputOracle }` gates `f_m` and `f_i` entirely against real oracles.
-//! TEE-backed attestation and an on-chain registry source remain Phase 3b; a
-//! real `Renewal::evaluate` needs a trait redesign (see `ROADMAP.md`).
+//! TEE-backed attestation and an on-chain registry source remain Phase 3b.
+//! The [`renewal::Renewal`] trait carries the settlement clock and thresholds,
+//! and [`renewal::WindowedRenewal`] implements prospective-only root-bump
+//! semantics against the `f_s` window.
 //!
 //! The first **Solana**-targeted adapter ships behind `--features darkpool-sol`
 //! ([`darkpool`] + [`price_freshness`]): a **seconds-native, multi-party** gate
@@ -140,8 +142,8 @@ pub use model_registry::{ModelEpoch, ModelLineage, QuorumModelOracle, QuorumSign
 
 #[cfg(feature = "darkpool-sol")]
 pub use darkpool::{
-    verify_party_contexts, DarkPoolSettlement, DarkPoolThresholds, PartyContext, PartyRole,
-    PartyVerdict,
+    verify_party_contexts, DarkPoolSettlement, DarkPoolThresholds, PartyContext,
+    PartyIntegrityError, PartyRole, PartyVerdict,
 };
 #[cfg(feature = "darkpool-sol")]
 pub use price_freshness::{PriceAttestation, PriceFreshnessOracle};

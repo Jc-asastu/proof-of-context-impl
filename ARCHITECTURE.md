@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-This document maps the conceptual framework of the paper to the Rust module structure of this crate. Read alongside the position paper at [github.com/asastuai/proof-of-context](https://github.com/asastuai/proof-of-context) v0.7.
+This document maps the conceptual framework of the paper to the Rust module structure of this crate. Read alongside the position paper at [github.com/asastuai/proof-of-context](https://github.com/asastuai/proof-of-context) v0.9.
 
 ---
 
@@ -58,7 +58,7 @@ A `FreshnessCommitment` is the signed artifact a worker produces. It binds `(con
 
 ### `oracle` — `CanonicalStateOracle`
 
-Settlement-time canonical-state lookups for the two freshness predicates that need state external to the commitment: `model_epoch_distance` (`f_m`) and `input_lag_blocks` (`f_i`). `consistent` and `f_s` are decidable from the commitment and `now` alone; `f_m`/`f_i` are not. This is the surface the paper's **H4** assumption (an honest canonical-state oracle) attaches to. v0.3 ships the trait plus `mock::MockCanonicalStateOracle`; the real implementation (on-chain model-root+epoch registry for `f_m`, BaseOracle for `f_i`) is pieza 1b.
+Settlement-time canonical-state lookups for the two freshness predicates that need state external to the commitment: `model_epoch_distance` (`f_m`) and `input_lag_blocks` (`f_i`). `consistent` and `f_s` are decidable from the commitment and `now` alone; `f_m`/`f_i` are not. This is the surface the paper's **H4** assumption (an honest canonical-state oracle) attaches to. v0.3 ships the trait, `mock::MockCanonicalStateOracle`, and two **real** feature-gated oracles: `input_freshness::BaseOracleInputOracle` (`f_i`, witness-presented attestations, `--features oracle-fi`) and `model_registry::QuorumModelOracle` (`f_m`, M-of-N quorum-signed lineage, `--features oracle-fm`), composable per-axis via `SplitOracle`.
 
 ### `settle` — `SettlementGate`, `SettlementResult`
 
@@ -97,4 +97,4 @@ Phase 2 (the first real-cryptography phase) landed in v0.2:
 - `thiserror` replacing the hand-rolled error enum
 - Serde implementations on all public structs
 
-Phase 3a / v0.3 (pieza 1) added the `CanonicalStateOracle` trait and wired `consistent` + `f_m` + `f_i` + `f_s` into the gate, with `consistent` redefined as internal triple-anchor agreement and `f_c` deferred. The Drand and JSON-RPC block-height clients are also landed under the `real-anchors` feature. Phase 3b / pieza 1b pends: the TEE backend (TDX quote parser + H100 attestation verifier) and the *real* canonical-state oracle (on-chain model-root registry + BaseOracle). Phase 4 is the SUR Protocol integration. See [`ROADMAP.md`](./ROADMAP.md).
+Phase 3a / v0.3 (pieza 1) added the `CanonicalStateOracle` trait and wired `consistent` + `f_m` + `f_i` + `f_s` into the gate, with `consistent` redefined as internal triple-anchor agreement and `f_c` deferred. The Drand and JSON-RPC block-height clients landed under the `real-anchors` feature; the **real** `f_i` and `f_m` oracles landed as piezas 1b-i / 1b-m (feature-gated); the Solana dark-pool multi-party gate landed as brick 1 (`--features darkpool-sol`) with on-chain enforcement merged in sur-protocol-solana PR #1 (brick 3). Phase 3b pends: the TEE backend (TDX quote parser + H100 attestation verifier) and an on-chain registry source for the model lineage. Phase 4 is the SUR integration (Solana deployment target). See [`ROADMAP.md`](./ROADMAP.md).

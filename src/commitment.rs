@@ -48,11 +48,11 @@ impl FreshnessCommitment {
     /// `drand_round` (u64 LE).
     pub fn signing_digest(&self) -> Hash32 {
         let mut h = Sha256::new();
-        h.update(&self.context_root);
-        h.update(&self.anchor.block_height.to_le_bytes());
-        h.update(&self.anchor.tee_timestamp.to_le_bytes());
-        h.update(&self.anchor.drand_round.to_le_bytes());
-        h.update(&self.output_hash);
+        h.update(self.context_root);
+        h.update(self.anchor.block_height.to_le_bytes());
+        h.update(self.anchor.tee_timestamp.to_le_bytes());
+        h.update(self.anchor.drand_round.to_le_bytes());
+        h.update(self.output_hash);
         h.finalize().into()
     }
 }
@@ -84,8 +84,8 @@ mod serde_bytes {
             }
             fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
                 let mut arr = [0u8; N];
-                for i in 0..N {
-                    arr[i] = seq.next_element()?
+                for byte in arr.iter_mut() {
+                    *byte = seq.next_element()?
                         .ok_or_else(|| serde::de::Error::custom("short sequence"))?;
                 }
                 Ok(arr)
