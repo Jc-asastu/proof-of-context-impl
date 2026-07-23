@@ -87,6 +87,7 @@
 
 pub mod anchor;
 pub mod attestation;
+pub mod backing;
 pub mod commitment;
 pub mod context;
 pub mod error;
@@ -127,6 +128,7 @@ pub mod darkpool;
 pub mod clients;
 
 pub use anchor::TripleAnchor;
+pub use backing::{AgePolicy, BackingEntry, BackingSet, BackingVerdict, BoundaryAge, StaleEntry};
 pub use commitment::{ContextCommitter, FreshnessCommitment};
 pub use context::ExecutionContextRoot;
 pub use error::PocError;
