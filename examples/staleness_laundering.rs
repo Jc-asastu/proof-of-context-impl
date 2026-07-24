@@ -23,7 +23,11 @@
 //!
 //! Run with: `cargo run --example staleness_laundering`
 
-use proof_of_context::backing::{AgePolicy, BackingEntry, BackingSet, BackingVerdict};
+use ed25519_dalek::SigningKey;
+use proof_of_context::backing::{
+    AgePolicy, BackingEntry, BackingSet, BackingVerdict, SignedBackingEntry, SignedBackingSet,
+    TrustedValidators,
+};
 
 const DAY: u64 = 86_400;
 
@@ -161,5 +165,50 @@ fn main() {
         "  what crosses the boundary: {}",
         serde_json::to_string(&boundary).unwrap()
     );
-    println!("  (one scalar - RFC 9111's Age, the privacy-preserving degenerate form)");
+    println!("  (one scalar - RFC 9111's Age, the privacy-preserving degenerate form)\n");
+
+    // ---------------------------------------------------------------
+    // v0.2a: signing closes forgery (but not omission).
+    // ---------------------------------------------------------------
+    println!("-- v0.2a: signed backing (forgery closed, omission still open) --");
+
+    // The validator (e.g. engram-live) holds the key; consumers trust it.
+    let validator = SigningKey::from_bytes(&[1u8; 32]);
+    let attacker = SigningKey::from_bytes(&[9u8; 32]);
+    let trusted = TrustedValidators::new().with(validator.verifying_key().to_bytes());
+
+    // A malicious stage forges a FRESH attestation for obs:44 to launder it,
+    // signing with its own key (it does not have the validator's).
+    let forged = SignedBackingEntry::sign(
+        BackingEntry {
+            source_id: "obs:44".to_string(),
+            attested_at_secs: now - 60, // "re-validated a minute ago" — a lie
+            class: "repo-structure".to_string(),
+        },
+        [0xFF; 32],
+        &attacker,
+    );
+    println!(
+        "  attacker forges obs:44 as 60s-old: signature valid? {} | trusted? {}",
+        forged.is_signature_valid(),
+        forged.is_trusted(&trusted)
+    );
+    let (verified, rejected) = SignedBackingSet::from_entries([forged]).into_verified(&trusted);
+    println!(
+        "  into_verified: {} rejected, {} trusted -> gate sees the real age, forgery defeated",
+        rejected,
+        verified.len()
+    );
+
+    // The honest validator's real (old) attestation IS trusted and gates STALE.
+    let honest = SignedBackingEntry::sign(
+        BackingEntry { source_id: "obs:44".to_string(), attested_at_secs: april, class: "repo-structure".to_string() },
+        [0xAB; 32],
+        &validator,
+    );
+    let (real, _) = SignedBackingSet::from_entries([honest]).into_verified(&trusted);
+    println!("  honest validator's attestation -> gate: {:?}", real.gate(&policy, now));
+
+    println!("  OPEN (v0.2b, Forough): a stage can still OMIT obs:44 entirely.");
+    println!("  Signing stops forgery, not omission — the compound-attestation frontier.");
 }

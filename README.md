@@ -96,7 +96,9 @@ Agent pipelines launder staleness: every derivation (an LLM summary, a plan) sta
 - **`gate(policy)`** — evaluates *source* age at *settlement* time, per freshness class, fail-closed on unknown classes; a `Stale` verdict lists exactly which sources to re-verify (targeted, not re-verify-everything).
 - **`BoundaryAge`** — the privacy rule, enforced by the type system: a backing set is a provenance trace and stays inside the trust domain; what crosses a boundary is one scalar (`max_age_secs`) — RFC 9111's degenerate form.
 
-Honest scope: unsigned metadata plumbing in v0.1 (signing backing chains over the existing Ed25519 machinery is the compound-attestation extension); windows are operator-chosen, not derived. Lineage: RFC 9111, event-time/watermarks (Dataflow/Flink), TOCTOU-in-agents (arXiv 2508.17155), Copilot 2004. Run the demo: `cargo run --example staleness_laundering`. First deployment: `engram-live` (agent-memory freshness sidecar) gates STILL_VALID verdicts by attestation age with it.
+**v0.2a — signing (closes forgery):** `SignedBackingEntry` binds an entry to the source content it was validated against with a validator's Ed25519 signature; `TrustedValidators` + `SignedBackingSet::into_verified` reject entries not signed by a trusted key, so a stage cannot forge a fresh `attested_at` to launder staleness. It does **not** close *omission* (a stage can drop a signed entry) — that is the compound-attestation frontier (v0.2b, Forough et al. arXiv 2605.03213), documented as loudly as the forgery gap was. The forgery demo is in `examples/staleness_laundering.rs`.
+
+Honest scope: windows are operator-chosen, not derived; v0.2a signs individual entries, not whole-set commitments. Lineage: RFC 9111, event-time/watermarks (Dataflow/Flink), TOCTOU-in-agents (arXiv 2508.17155), Copilot 2004. Run the demo: `cargo run --example staleness_laundering`. First deployment: `engram-live` (agent-memory freshness sidecar) gates STILL_VALID verdicts by attestation age with it.
 
 ## Roadmap
 

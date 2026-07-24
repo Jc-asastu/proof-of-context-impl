@@ -21,9 +21,11 @@
 //! Copilot 2004 window-of-vulnerability · PoC framework v0.9.1. No theorem
 //! claims: this is engineering transfer plus a working artifact.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// One backing claim: "this output transitively depends on `source_id`,
 /// which was last validated against ground truth at `attested_at_secs`".
@@ -208,6 +210,237 @@ impl BackingSet {
         } else {
             BackingVerdict::Stale(stale)
         }
+    }
+}
+
+// ===========================================================================
+// v0.2a — signed backing entries (closes FORGERY; omission remains open).
+//
+// A stage that derives an output cannot forge a fresh `attested_at` for a
+// source: only the source's *validator* (the thing that checked it against
+// ground truth) holds the signing key. A downstream consumer that trusts the
+// validator's key verifies the attestation without re-reading the source.
+//
+// What this does NOT close: OMISSION. A malicious stage can drop a signed
+// entry entirely, or present an empty backing set. Signing makes entries
+// unforgeable, not un-omittable. Closing omission requires each stage to
+// sign a commitment to its *whole* backing set, chained across stages — an
+// attestation chain that breaks v0.1's stage transparency. That is the
+// "compound attestation for multi-hop agent chains" open challenge
+// (Forough et al., arXiv 2605.03213) and is deferred to v0.2b. See spec §2.6.
+// ===========================================================================
+
+/// A [`BackingEntry`] with a validator's Ed25519 signature binding it to the
+/// content the source had at validation time. The signature is over
+/// `SHA-256(len(source_id)‖source_id‖attested_at‖len(class)‖class‖content_hash)`
+/// (variable-length fields are length-prefixed so field boundaries cannot be
+/// shifted to collide).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedBackingEntry {
+    /// The backing claim being attested.
+    pub entry: BackingEntry,
+    /// Hash of the source's content at `entry.attested_at_secs`. Binds the
+    /// attestation to *what was seen*, not just when.
+    #[serde(with = "byte_array_serde")]
+    pub content_hash: [u8; 32],
+    /// Ed25519 signature (R‖S) over the canonical digest.
+    #[serde(with = "byte_array_serde")]
+    pub signature: [u8; 64],
+    /// 32-byte Ed25519 public key of the validator that signed this entry.
+    #[serde(with = "byte_array_serde")]
+    pub validator_pubkey: [u8; 32],
+}
+
+impl SignedBackingEntry {
+    /// Canonical signing digest — length-prefixed to prevent field-boundary
+    /// collisions between the variable-length `source_id` and `class`.
+    pub fn signing_digest(entry: &BackingEntry, content_hash: &[u8; 32]) -> [u8; 32] {
+        let mut h = Sha256::new();
+        h.update((entry.source_id.len() as u32).to_le_bytes());
+        h.update(entry.source_id.as_bytes());
+        h.update(entry.attested_at_secs.to_le_bytes());
+        h.update((entry.class.len() as u32).to_le_bytes());
+        h.update(entry.class.as_bytes());
+        h.update(content_hash);
+        h.finalize().into()
+    }
+
+    /// Sign `entry` + `content_hash` with a validator key.
+    pub fn sign(entry: BackingEntry, content_hash: [u8; 32], key: &SigningKey) -> Self {
+        let digest = Self::signing_digest(&entry, &content_hash);
+        let signature = key.sign(&digest).to_bytes();
+        let validator_pubkey = key.verifying_key().to_bytes();
+        Self {
+            entry,
+            content_hash,
+            signature,
+            validator_pubkey,
+        }
+    }
+
+    /// True iff the embedded signature verifies over the digest by the
+    /// embedded pubkey. Internal consistency only — a forger can embed their
+    /// *own* pubkey, so trust requires [`is_trusted`](Self::is_trusted).
+    pub fn is_signature_valid(&self) -> bool {
+        let digest = Self::signing_digest(&self.entry, &self.content_hash);
+        let Ok(vk) = VerifyingKey::from_bytes(&self.validator_pubkey) else {
+            return false;
+        };
+        let sig = ed25519_dalek::Signature::from_bytes(&self.signature);
+        vk.verify(&digest, &sig).is_ok()
+    }
+
+    /// True iff the signature is valid **and** `validator_pubkey` is in the
+    /// trusted set.
+    pub fn is_trusted(&self, trusted: &TrustedValidators) -> bool {
+        self.is_signature_valid() && trusted.contains(&self.validator_pubkey)
+    }
+}
+
+/// The set of validator public keys a consumer will trust attestations from.
+#[derive(Debug, Clone, Default)]
+pub struct TrustedValidators {
+    keys: BTreeSet<[u8; 32]>,
+}
+
+impl TrustedValidators {
+    /// Empty trust set (trusts no one — every signed entry is rejected).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Builder: add a trusted validator public key.
+    pub fn with(mut self, pubkey: [u8; 32]) -> Self {
+        self.keys.insert(pubkey);
+        self
+    }
+
+    /// True iff `pubkey` is trusted.
+    pub fn contains(&self, pubkey: &[u8; 32]) -> bool {
+        self.keys.contains(pubkey)
+    }
+}
+
+/// A backing set of *signed* entries, keyed by `source_id`, deduplicated
+/// oldest-wins on the inner attestation time (same conservative rule as
+/// [`BackingSet`]). Propagation across stages is [`union`](Self::union).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedBackingSet {
+    entries: BTreeMap<String, SignedBackingEntry>,
+}
+
+impl SignedBackingSet {
+    /// Empty set.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Build from signed entries, oldest-wins dedup by `source_id`.
+    pub fn from_entries(entries: impl IntoIterator<Item = SignedBackingEntry>) -> Self {
+        let mut set = Self::new();
+        for signed in entries {
+            set.insert(signed);
+        }
+        set
+    }
+
+    /// Insert one signed entry; keep the one whose inner `attested_at_secs`
+    /// is older when `source_id` collides (conservative).
+    pub fn insert(&mut self, signed: SignedBackingEntry) {
+        match self.entries.get(&signed.entry.source_id) {
+            Some(existing) if existing.entry.attested_at_secs <= signed.entry.attested_at_secs => {}
+            _ => {
+                self.entries.insert(signed.entry.source_id.clone(), signed);
+            }
+        }
+    }
+
+    /// The propagation rule for signed entries: union, oldest-wins.
+    pub fn union(&self, other: &Self) -> Self {
+        let mut out = self.clone();
+        for signed in other.entries.values() {
+            out.insert(signed.clone());
+        }
+        out
+    }
+
+    /// Number of distinct signed sources.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// True iff empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Iterate signed entries in canonical (source_id) order.
+    pub fn iter(&self) -> impl Iterator<Item = &SignedBackingEntry> {
+        self.entries.values()
+    }
+
+    /// Verify against `trusted` and project down to a plain v0.1
+    /// [`BackingSet`] containing only the trusted-and-valid entries, so the
+    /// existing [`BackingSet::gate`] applies unchanged. Returns the verified
+    /// set plus the count of rejected (untrusted or bad-signature) entries —
+    /// the observability signal a consumer can use to notice missing backing
+    /// (partial omission detection; full omission remains open, spec §2.6).
+    pub fn into_verified(&self, trusted: &TrustedValidators) -> (BackingSet, usize) {
+        let mut verified = BackingSet::new();
+        let mut rejected = 0;
+        for signed in self.entries.values() {
+            if signed.is_trusted(trusted) {
+                verified.insert(signed.entry.clone());
+            } else {
+                rejected += 1;
+            }
+        }
+        (verified, rejected)
+    }
+}
+
+/// serde for fixed byte arrays via `serialize_bytes` (compact wire form;
+/// serde has no native impl for `[u8; 64]`). Mirrors `commitment.rs`.
+mod byte_array_serde {
+    use serde::de::{SeqAccess, Visitor};
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S, const N: usize>(bytes: &[u8; N], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_bytes(bytes)
+    }
+
+    pub fn deserialize<'de, D, const N: usize>(deserializer: D) -> Result<[u8; N], D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct BytesVisitor<const N: usize>;
+        impl<'de, const N: usize> Visitor<'de> for BytesVisitor<N> {
+            type Value = [u8; N];
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(f, "byte array of length {N}")
+            }
+            fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+                if v.len() != N {
+                    return Err(E::custom("wrong length"));
+                }
+                let mut arr = [0u8; N];
+                arr.copy_from_slice(v);
+                Ok(arr)
+            }
+            fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                let mut arr = [0u8; N];
+                for byte in arr.iter_mut() {
+                    *byte = seq
+                        .next_element()?
+                        .ok_or_else(|| serde::de::Error::custom("short sequence"))?;
+                }
+                Ok(arr)
+            }
+        }
+        deserializer.deserialize_bytes(BytesVisitor::<N>)
     }
 }
 
@@ -447,5 +680,135 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         let back: BackingSet = serde_json::from_str(&json).unwrap();
         assert_eq!(s, back);
+    }
+
+    // ---------- v0.2a: signed entries ----------
+
+    fn key(seed: u8) -> SigningKey {
+        SigningKey::from_bytes(&[seed; 32])
+    }
+    fn pk(k: &SigningKey) -> [u8; 32] {
+        k.verifying_key().to_bytes()
+    }
+
+    #[test]
+    fn sign_then_verify_roundtrip() {
+        let s = SignedBackingEntry::sign(e("obs:44", 1_000, "repo-structure"), [0xAB; 32], &key(1));
+        assert!(s.is_signature_valid());
+    }
+
+    #[test]
+    fn tampering_attested_at_after_signing_breaks_signature() {
+        let mut s = SignedBackingEntry::sign(e("obs:44", 1_000, "c"), [0xAB; 32], &key(1));
+        assert!(s.is_signature_valid());
+        s.entry.attested_at_secs = 9_999_999; // rewrite to look fresh
+        assert!(!s.is_signature_valid());
+    }
+
+    #[test]
+    fn tampering_content_hash_breaks_signature() {
+        let mut s = SignedBackingEntry::sign(e("x", 100, "c"), [0x11; 32], &key(1));
+        s.content_hash = [0x22; 32];
+        assert!(!s.is_signature_valid());
+    }
+
+    #[test]
+    fn trusted_iff_valid_and_key_in_set() {
+        let v = key(1);
+        let s = SignedBackingEntry::sign(e("x", 100, "c"), [1; 32], &v);
+        assert!(s.is_trusted(&TrustedValidators::new().with(pk(&v))));
+        assert!(!s.is_trusted(&TrustedValidators::new().with(pk(&key(2))))); // valid, untrusted
+        assert!(!s.is_trusted(&TrustedValidators::new())); // empty set trusts no one
+    }
+
+    #[test]
+    fn digest_is_canonical_no_field_boundary_collision() {
+        // ("ab","c") vs ("a","bc") must NOT collide: fields are length-prefixed.
+        let d1 = SignedBackingEntry::signing_digest(&e("ab", 1, "c"), &[0; 32]);
+        let d2 = SignedBackingEntry::signing_digest(&e("a", 1, "bc"), &[0; 32]);
+        assert_ne!(d1, d2);
+    }
+
+    /// The forgery the signature exists to stop: an attacker fabricates a
+    /// fresh attestation for a source the trusted validator never signed.
+    /// They can produce a valid signature (with their own key), but it is
+    /// not trusted, so `into_verified` rejects it — it never enters the gate.
+    #[test]
+    fn forged_attestation_by_untrusted_key_is_rejected() {
+        let validator = key(1);
+        let attacker = key(9);
+        let trusted = TrustedValidators::new().with(pk(&validator));
+
+        let honest = SignedBackingEntry::sign(e("obs:44", 1_000, "repo"), [0xAB; 32], &validator);
+        let forged = SignedBackingEntry::sign(e("obs:99", 9_999_999, "repo"), [0; 32], &attacker);
+        assert!(forged.is_signature_valid()); // signed correctly...
+        assert!(!forged.is_trusted(&trusted)); // ...but not by a trusted key
+
+        let set = SignedBackingSet::from_entries([honest, forged]);
+        let (verified, rejected) = set.into_verified(&trusted);
+        assert_eq!(rejected, 1);
+        assert_eq!(verified.len(), 1);
+        assert_eq!(verified.iter().next().unwrap().source_id, "obs:44");
+    }
+
+    #[test]
+    fn into_verified_dedups_oldest_and_counts_rejected() {
+        let v = key(1);
+        let attacker = key(9);
+        let trusted = TrustedValidators::new().with(pk(&v));
+        let set = SignedBackingSet::from_entries([
+            SignedBackingEntry::sign(e("x", 500, "c"), [0; 32], &v),
+            SignedBackingEntry::sign(e("x", 100, "c"), [0; 32], &v), // older, wins
+            SignedBackingEntry::sign(e("y", 200, "c"), [0; 32], &attacker), // untrusted
+        ]);
+        let (verified, rejected) = set.into_verified(&trusted);
+        assert_eq!(verified.len(), 1);
+        assert_eq!(verified.iter().next().unwrap().attested_at_secs, 100);
+        assert_eq!(rejected, 1);
+    }
+
+    #[test]
+    fn signed_union_propagates_oldest_wins() {
+        let v = key(1);
+        let a = SignedBackingSet::from_entries([SignedBackingEntry::sign(e("x", 500, "c"), [0; 32], &v)]);
+        let b = SignedBackingSet::from_entries([SignedBackingEntry::sign(e("x", 100, "c"), [0; 32], &v)]);
+        let u = a.union(&b);
+        assert_eq!(u.len(), 1);
+        assert_eq!(u.iter().next().unwrap().entry.attested_at_secs, 100);
+    }
+
+    /// Honesty test — the documented v0.2b gap (spec §2.6). Signing stops
+    /// forgery, NOT omission: a stage that simply DROPS the stale signed
+    /// entry yields a set that gates Fresh. This is expected and codified.
+    #[test]
+    fn omission_gap_is_not_closed_by_v0_2a() {
+        let v = key(1);
+        let trusted = TrustedValidators::new().with(pk(&v));
+        let p = policy(&[("repo-structure", 7 * 86_400)], None);
+        let now = 2_000_000_000u64;
+
+        let stale = SignedBackingEntry::sign(
+            e("obs:44", now - 90 * 86_400, "repo-structure"),
+            [0xAB; 32],
+            &v,
+        );
+        let full = SignedBackingSet::from_entries([stale]);
+        assert!(matches!(
+            full.into_verified(&trusted).0.gate(&p, now),
+            BackingVerdict::Stale(_)
+        ));
+
+        // Malicious stage drops it -> empty -> Fresh. NOT caught (the gap).
+        let omitted = SignedBackingSet::new();
+        assert_eq!(omitted.into_verified(&trusted).0.gate(&p, now), BackingVerdict::Fresh);
+    }
+
+    #[test]
+    fn signed_entry_serde_roundtrip() {
+        let s = SignedBackingEntry::sign(e("x", 100, "c"), [7; 32], &key(3));
+        let json = serde_json::to_string(&s).unwrap();
+        let back: SignedBackingEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, back);
+        assert!(back.is_signature_valid());
     }
 }

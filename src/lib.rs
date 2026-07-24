@@ -128,7 +128,10 @@ pub mod darkpool;
 pub mod clients;
 
 pub use anchor::TripleAnchor;
-pub use backing::{AgePolicy, BackingEntry, BackingSet, BackingVerdict, BoundaryAge, StaleEntry};
+pub use backing::{
+    AgePolicy, BackingEntry, BackingSet, BackingVerdict, BoundaryAge, SignedBackingEntry,
+    SignedBackingSet, StaleEntry, TrustedValidators,
+};
 pub use commitment::{ContextCommitter, FreshnessCommitment};
 pub use context::ExecutionContextRoot;
 pub use error::PocError;
